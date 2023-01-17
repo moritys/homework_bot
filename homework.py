@@ -60,35 +60,36 @@ def send_message(bot, message):
 def get_api_answer(timestamp):
     """Функция делает запрос к единственному эндпоинту API-сервиса."""
     payload = {'from_date': timestamp}
-
     try:
         response = requests.get(ENDPOINT, headers=HEADERS, params=payload)
-        return response
-    except Exception as error:
-        logging.error(f'Error with main API response: {error}')
+        if response.status_code == 200:
+            return response.json()
+        else:
+            logging.error(f'API status code: {response.status_code}')
+    except requests.exceptions.RequestException as error:
+        raise SystemExit(error)
 
 
 def check_response(response):
     """Функция проверяет ответ API на соответствие документации."""
-    try:
-        return response.json().get('homeworks')[0]
-    except Exception as error:
-        logging.error(f'Error with JSON: {error}')
+    if not isinstance(response.get('homeworks'), list):
+        raise TypeError('API answer is not correct type')
+    if not isinstance(response, dict):
+        raise TypeError('API answer is not correct type')
+    return response.get('homeworks')[0]
 
 
 def parse_status(homework):
     """
     Функция извлекает из информации о конкретной домашней работе её статус.
     """
-    try:
-        homework_name = homework.get('homework_name')
-        status = homework.get('status')
-        if status not in HOMEWORK_VERDICTS:
-            logging.error('Unknown status of homework')
+    homework_name = homework.get('homework_name')
+    status = homework.get('status')
+    if status in HOMEWORK_VERDICTS:
         verdict = HOMEWORK_VERDICTS[status]
         return f'Изменился статус проверки работы "{homework_name}". {verdict}'
-    except Exception as error:
-        logging.error(f'Error with status parsing: {error}')
+    else:
+        logging.error('Unknown status of homework')
 
 
 def main():
@@ -103,11 +104,13 @@ def main():
     if check_tokens():
         bot = telegram.Bot(token=TELEGRAM_TOKEN)
         timestamp = (int(time.time()) - 7889229)  # последние 3 месяца
+
     while True:
         try:
             response = get_api_answer(timestamp)
             message = parse_status(check_response(response))
             send_message(bot, message)
+            timestamp = response.get('current_date')
             time.sleep(RETRY_PERIOD)
         except Exception as error:
             message = f'Bot is definitely dead: {error}'
