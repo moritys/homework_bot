@@ -1,32 +1,23 @@
 import logging
+import logging.config
 import os
 import sys
 import time
+from http import HTTPStatus
 
 from dotenv import load_dotenv
 
 import exceptions as ex
+
+import loggerconfig as log
 
 import requests
 
 import telegram
 
 
-logging.basicConfig(
-    level=logging.DEBUG,
-    filename='program.log',
-    format='%(asctime)s, %(levelname)s, %(message)s',
-)
-
-formatter = logging.Formatter(
-    '%(asctime)s - %(levelname)s - %(message)s'
-)
-
+logging.config.dictConfig(log.LOGGING_CONFIG)
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
-handler = logging.StreamHandler(stream=sys.stdout)
-handler.setFormatter(formatter)
-logger.addHandler(handler)
 
 
 load_dotenv()
@@ -37,6 +28,7 @@ TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
 RETRY_PERIOD = 600
+THREE_MONTHS = 7889229
 ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
 HEADERS = {'Authorization': f'OAuth {PRACTICUM_TOKEN}'}
 
@@ -54,9 +46,7 @@ def check_tokens():
     При отсуствии хотя бы одного значения, прерывает работу программы.
     """
     logger.info('Начали проверку переменных окружения')
-    if not (PRACTICUM_TOKEN and TELEGRAM_TOKEN and TELEGRAM_CHAT_ID):
-        logger.critical('Отсутствуют переменные окружения!')
-        raise ex.HaveNotEnvException('Отсутствуют переменные окружения!')
+    return all([PRACTICUM_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID])
 
 
 def send_message(bot, message):
@@ -79,25 +69,10 @@ def get_api_answer(timestamp):
     try:
         logger.info(f'Делаем запрос к эндпоинту: {ENDPOINT}')
         response = requests.get(ENDPOINT, headers=HEADERS, params=payload)
-    except requests.exceptions.HTTPError as error:
-        message = f'Недоступен эндпоинт: {error}'
-        logger.error(message)
-        raise requests.exceptions.HTTPError(message)
-    except requests.exceptions.Timeout as error:
-        message = f'Недоступен эндпоинт: {error}'
-        logger.error(message)
-        raise requests.exceptions.Timeout(message)
-    except requests.exceptions.InvalidURL as error:
-        message = f'Проблема с URL: {error}. Текущее значение URL: {ENDPOINT}'
-        logger.error(message)
-        raise requests.exceptions.InvalidURL(message)
     except requests.RequestException as error:
         message = f'Код ответа API: {response.status_code}. Ошибка: {error}'
-        logger.error(message)
         raise requests.RequestException(message)
-    else:
-        logger.info('✅Эндпоинт доступен и вернул ответ')
-    if response.status_code != 200:
+    if response.status_code != HTTPStatus.OK:
         raise ex.WrongAnswerStatus(
             f'Сервер вернул некорректный статус: {response.status_code}'
         )
@@ -111,10 +86,10 @@ def check_response(response):
         raise TypeError('Сервер вернул не словарь')
     if response == []:
         logger.debug('В данных момент список домашек пуст')
-    if not isinstance(response.get('homeworks'), list):
-        raise TypeError('Тип домашних работ не в виде списка')
     if response.get('homeworks') == ():
         raise ex.HomeworkListIsEmpty('В ответе апи нет ключа homeworks')
+    if not isinstance(response.get('homeworks'), list):
+        raise TypeError('Тип домашних работ не в виде списка')
     return response.get('homeworks')[0]
 
 
@@ -127,14 +102,10 @@ def parse_status(homework):
             'В ответе API домашки нет ключа homework_name'
         )
     status = homework.get('status')
-    if status in HOMEWORK_VERDICTS:
-        verdict = HOMEWORK_VERDICTS[status]
-        return (
-            f'Изменился статус проверки работы "{homework_name}". '
-            f'{verdict}'
-        )
-    else:
+    if status not in HOMEWORK_VERDICTS:
         raise ex.UnknownStatusException('Неизвестный статус домашки')
+    verdict = HOMEWORK_VERDICTS[status]
+    return (f'Изменился статус проверки работы "{homework_name}". {verdict}')
 
 
 def main():
@@ -144,23 +115,45 @@ def main():
     с периодичностью в 10 минут.
     Первый запрос делается за последние три месяца.
     """
-    check_tokens()
+    if check_tokens() is False:
+        logger.critical('Отсутствуют переменные окружения!')
+        raise ex.HaveNotEnvException('Отсутствуют переменные окружения!')
+        sys.exit()
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
-    timestamp = (int(time.time()) - 7889229)  # последние 3 месяца
+    timestamp = (int(time.time()) - THREE_MONTHS)
+    old_message = ''
+
+    def logging_errors(message):
+        logger.error(message)
+        if old_message != message:
+            send_message(bot, message)
 
     while True:
+        logger.info('Запускаем главную функцию')
         try:
-            logger.info('Запускаем главную функцию')
             response = get_api_answer(timestamp)
             homework = check_response(response)
             message = parse_status(homework)
             send_message(bot, message)
             timestamp = response.get('current_date')
+        except requests.RequestException as error:
+            message = f'Проблема в работе API: {error}.'
+            logging_errors(message)
+        except ex.WrongAnswerStatus as error:
+            message = f'Проблема в работе API: {error}.'
+            logging_errors(message)
+        except TypeError as error:
+            message = f'Ошибка в типе данных: {error}.'
+            logging_errors(message)
+        except ex.UnknownStatusException as error:
+            message = f'Ошибка в обработке ответа: {error}.'
+            logging_errors(message)
         except Exception as error:
             message = f'Что-то пошло не так: {error}'
-            logger.error(message)
-            send_message(bot, message)
+            logging_errors(message)
         finally:
+            old_message = message
+            logger.info('Следующий запрос к серверу через 10 минут.')
             time.sleep(RETRY_PERIOD)
 
 
