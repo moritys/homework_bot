@@ -141,9 +141,6 @@ def main():
         except requests.RequestException as error:
             message = f'Проблема в работе API: {error}.'
             logging_errors(message)
-        except TypeError as error:
-            message = f'Ошибка в типе данных: {error}.'
-            logging_errors(message)
         except ex.UnknownStatusException as error:
             message = f'Ошибка в обработке ответа: {error}.'
             logging_errors(message)
