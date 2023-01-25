@@ -86,11 +86,11 @@ def check_response(response):
         raise TypeError('Сервер вернул не словарь')
     if response == []:
         logger.debug('В данных момент список домашек пуст')
-    if response.get('homeworks') == ():
-        raise ex.HomeworkListIsEmpty('В ответе апи нет ключа homeworks')
+    if len(response.get('homeworks')) == 0:
+        logger.debug('В данный момент обновлений нет')
     if not isinstance(response.get('homeworks'), list):
         raise TypeError('Тип домашних работ не в виде списка')
-    return response.get('homeworks')[0]
+    return response['homeworks']
 
 
 def parse_status(homework):
@@ -117,11 +117,12 @@ def main():
     """
     if check_tokens() is False:
         logger.critical('Отсутствуют переменные окружения!')
-        raise ex.HaveNotEnvException('Отсутствуют переменные окружения!')
         sys.exit()
     bot = telegram.Bot(token=TELEGRAM_TOKEN)
     timestamp = (int(time.time()) - THREE_MONTHS)
+    message = ''
     old_message = ''
+    homework = ()
 
     def logging_errors(message):
         logger.error(message)
@@ -133,8 +134,9 @@ def main():
         try:
             response = get_api_answer(timestamp)
             homework = check_response(response)
-            message = parse_status(homework)
-            send_message(bot, message)
+            if len(homework) > 0:
+                message = parse_status(homework[0])
+                send_message(bot, message)
             timestamp = response.get('current_date')
         except requests.RequestException as error:
             message = f'Проблема в работе API: {error}.'
