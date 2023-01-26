@@ -122,7 +122,6 @@ def main():
     timestamp = (int(time.time()) - THREE_MONTHS)
     message = ''
     old_message = ''
-    homework = ()
 
     def logging_errors(message):
         logger.error(message)
